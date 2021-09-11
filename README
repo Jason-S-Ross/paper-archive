@@ -1,0 +1,38 @@
+README
+======
+
+About this Project
+------------------
+
+This project provides tools to encode files as tiled QR codes and to recreate
+the files from the QR codes. This allows important digital documents like
+private keys to be archived on paper.
+
+Usage
+-----
+
+Call `generate-page $file $output` to create a single PNG image made of tiled QR
+codes that represent `$file`. Call `read-page $img1 $img2 $img3` to read from a
+series of images that contain the contents of one or more files.
+
+Method of Operation
+-------------------
+
+Files are broken up into chunks to be QR encoded. Each chunk has a header
+specifying the name of the file, its sha256 checksum, the number of the chunk,
+and the total number of chunks.
+
+The png image associated with each file has its name and sha256 checksum
+watermarked in plain text.
+
+In order to recreate a file, the final product's checksum must match the
+original.
+
+Contents are base64 encoded in the QR code.
+
+TODO Handle multiple pages of QR tiles
+
+Requirements
+------------
+
+This depends on ZBar Barcode Reader and Libqrencode.

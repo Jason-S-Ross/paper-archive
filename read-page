@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo $SHELL
+
+usage() { echo "Usage: $0 [SOURCES]" 1>&2; exit 1; }
+
+if [ -z "$1" ]; then
+    usage
+fi
+
+# Array mapping hash to file name
+declare -A FILENAMES
+# Array mapping hash to number of parts
+declare -A FILECOUNTS
+# Array mapping "hash n" to contents of file part
+declare -A FILEPARTS
+
+for file in "$@"; do
+    while read -r code; do
+        # Header looks like the following:
+        # Qr-Code:0123456789abcdef file.name
+        # 1	of 	2
+        #
+        # Remove "Qr-Code:" literal
+        MYFILEHEAD1=$(echo -e "$code" | sed -n '1p' | cut -d':' -f2)
+        # SHA256 hash followed by file name
+        MYFILEHASH=$(echo -e "$MYFILEHEAD1" | cut -d' ' -f1)
+        MYFILENAME=$(echo -e "$MYFILEHEAD1" | cut -d' ' -f3)
+        if [[ -v FILENAMES["$MYFILEHASH"] ]]; then
+            if [[ ${FILENAMES["$MYFILEHASH"]} != ${MYFILENAME} ]]; then
+                printf "File hash and QR code mismatch" >&2
+                exit 1
+            fi
+        else
+            FILENAMES["$MYFILEHASH"]=${MYFILENAME}
+        fi
+
+        MYFILECOUNT=$(echo -e "$code" | sed -n '2p' | cut -f1)
+        MYFILETOTALCOUNT=$(echo -e "$code" | sed -n '2p' | cut -f3)
+        if [[ -v FILECOUNTS["$MYFILEHASH"] ]]; then
+            if [[ ${FILECOUNTS["$MYFILEHASH"]} != ${MYFILETOTALCOUNT} ]]; then
+                printf "File total count mismatch" >&2
+                exit 1
+            fi
+        else
+            FILECOUNTS+=([${MYFILEHASH}]="$MYFILETOTALCOUNT")
+        fi
+
+        MYFILEPART=$(echo -e "$code" | tail -n +3)
+        MYKEY="${MYFILEHASH} ${MYFILECOUNT}"
+
+        if [[ -v FILEPARTS["$MYKEY"] ]]; then
+            printf "Same file part found multiple times" >&2
+            exit 1
+        else
+            FILEPARTS+=([${MYKEY}]="$MYFILEPART")
+        fi
+    # Since we are looping from a piped command, have to loop from input
+    # to avoid spawning a subshell
+    # https://unix.stackexchange.com/questions/272698/why-is-the-array-empty-after-the-while-loop
+    done < <(zbarimg "$file")
+done
+for keyhash in "${!FILENAMES[@]}"; do
+    RESULT=""
+    OUTPATH=${FILENAMES[${keyhash}]}
+    COUNT=${FILECOUNTS[${keyhash}]}
+    for i in $(seq 1 $COUNT); do
+        MYKEY="${keyhash} ${i}"
+        if ! [[ -v FILEPARTS[${MYKEY}] ]]; then
+            echo "Missing part for ${OUTPATH}. Missing part ${i} of ${COUNT}"
+            exit 1
+        fi
+        CONTENTS=${FILEPARTS[${MYKEY}]}
+        RESULT+="$CONTENTS"
+    done
+    RESULTHASH=$(base64 -d <(echo -n "$RESULT") | sha256sum | cut -d' ' -f1)
+    if [[ "$RESULTHASH" != "$keyhash" ]]; then
+        echo "Could not reconstruct file. Hashes don't match." >&2
+        exit 1
+    fi
+    if [[ -f "$OUTPATH" ]]; then
+        if [[ $(sha256sum "$OUTPATH" | cut -d' ' -f1) != "$RESULTHASH" ]]; then
+            echo "Found existing file at ${OUTPATH} without matching hash." >&2
+            exit 1
+        else
+            echo "Found existing file at ${OUTPATH} with matching hash." >&2
+            exit 0
+        fi
+    fi
+    base64 -d <(echo -n "$RESULT") > "$OUTPATH"
+done

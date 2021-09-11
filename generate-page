@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+
+# Generate a page of QR codes from a file
+
+# TODO Generate multiple output files
+
+usage() { echo "Usage: $0 [INPUT] [OUTPUT]" 1>&2; exit 1; }
+
+if [ -z "$1" ] || [ -z "$2" ]; then
+    usage
+fi
+
+set -euo pipefail
+
+TMPDIR=$(mktemp -d)
+TEMP_FILE=$(mktemp)
+# Bail out if the temp directory wasn't created successfully.
+if [ ! -e $TMPDIR ]; then
+    >&2 echo "Failed to create temp directory"
+    exit 1
+fi
+
+# Make sure it gets removed even if the script exits abnormally.
+trap "exit 1"           HUP INT PIPE QUIT TERM
+trap 'rm -rf "$TMPDIR"' EXIT
+
+OUTPUTPATH="${TMPDIR}/split-"
+
+mkdir "${TMPDIR}/qr-images"
+
+
+base64 "$1" -w0 | split -C 2500 -d - "$OUTPUTPATH"
+
+MYHASHHEADER=$(sha256sum "$1")
+
+MYFILECOUNT=$(ls "$OUTPUTPATH"?? | wc -l)
+MYCURRENTCOUNT=1
+for file in "${OUTPUTPATH}"*; do
+    MYHEADER="${MYHASHHEADER}\\n${MYCURRENTCOUNT}\\tof\\t${MYFILECOUNT}\\n"
+    MYCONTENTS="${MYHEADER}$(cat "$file")"
+    qrencode -s 3 -d 150 -o "${TMPDIR}/qr-images/$(basename $file)".png "$MYCONTENTS"
+    MYCURRENTCOUNT=$((MYCURRENTCOUNT + 1))
+done
+
+montage -mode concatenate "${TMPDIR}/qr-images/"*.png "./$2"
+convert \( "./$2" -background white -splice 0x100 \) \
+    \( +clone -font courier -pointsize 18 \
+    -draw "text 20, 20 '${MYHASHHEADER}' text 20, 50 '$(date)'" \) \
+    -composite "./$2"
